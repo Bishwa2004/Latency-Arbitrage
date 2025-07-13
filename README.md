@@ -17,7 +17,14 @@ This repository implements a latency-sensitive arbitrage detection and execution
   - Kelly criterion sizing with adaptive risk control
   - Quote intensity modeling using a custom point process
   - Simulated exchange + broker price feeds with configurable latency noise
+file BaseSIM will:
+Simulate 3 hours of exchange and broker feed latency
 
+Evaluate arbitrage opportunities
+
+Log trades and position details
+
+Generate a plot with equity curve and execution triggers
 ---
 ### References 
 -[1] Karatzas, I., & Shreve, S. (1991). Brownian Motion and Stochastic Cal-
@@ -38,7 +45,34 @@ trading and price discovery. Review of Financial Studies, 27(8), 2267-
 nancial Markets, 16(4), 646-679.
 -[8] Foucault, T., Pagano, M., & Roell, A. (2013). Market Liquidity: Theory,
 Evidence, and Policy. Oxford University Press.
-✅ **Execution**
+
+🛠️ Planned Updates & Future Additions
+This section tracks ongoing improvements and ideas for future development:
+
+🔄 Upcoming Features
+Interactive dashboard for trade inspection and latency diagnostics
+
+Enhanced volatility regime classification (e.g., using HMM or clustering)
+
+Live paper-trading integration via broker API
+
+🧪 Experimental Ideas
+Reinforcement learning for order timing under latency constraints
+
+Latency anomaly detection using autoencoders
+
+Entropy-based signal filtering for multi-source confirmation
+
+📌 Change Log
+JULY 12, 2025: Base framework tested; visualizations pending
+
+(Add new changes below as updates are made)
+
+Maintained by: Bishwa 
+License: MIT (or specify another license)
+Last updated: JULY 12, 2025
+
+
 
 Run the backtest using:
 
