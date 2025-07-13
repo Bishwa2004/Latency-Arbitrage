@@ -38,7 +38,7 @@ trading and price discovery. Review of Financial Studies, 27(8), 2267-
 nancial Markets, 16(4), 646-679.
 -[8] Foucault, T., Pagano, M., & Roell, A. (2013). Market Liquidity: Theory,
 Evidence, and Policy. Oxford University Press.
-### ✅ **Execution**
+✅ **Execution**
 
 Run the backtest using:
 
