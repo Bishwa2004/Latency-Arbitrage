@@ -1127,3 +1127,81 @@ plt.tight_layout(); plt.savefig(save_dir / 'sickpersonal_utilization_hist.png');
 
 print(f'Charts saved to: {save_dir.resolve()}')
 
+import pandas as pd
+import numpy as np
+
+# --- 1) Clean up column names (strip BOMs, spaces, case) ---
+cat.columns = (cat.columns
+                 .str.replace('\ufeff', '', regex=False)  # remove BOM
+                 .str.strip())
+
+# Optional: quick peek
+print(sorted(cat.columns.tolist()))
+
+# --- 2) Rename to consistent names used by the analysis ---
+rename_map = {
+    'dt': 'dt',
+    'Analyst Name': 'Analyst_Name',
+    'FUNCTION CODE': 'FUNCTION_CODE',
+    'Holiday': 'Holiday',
+    'Leave Paid': 'Leave_Paid',
+    'OI-Sick': 'Sick',
+    'Vacation Earned': 'Vacation_Earned',
+    'Vacation Purchase': 'Vacation_Purchase',
+    'OI-Personal Day': 'Personal',
+    'IML-Unpaid': 'Unpaid_IML',
+    'UnPaid Emergency': 'Unpaid_Emergency',
+    'Leave UnPaid': 'Unpaid_Leave',
+    'Non-Paid Unplan': 'Unpaid_NonPlan',
+    'Paid Emergency': 'Paid_Emergency',
+    'Overtime': 'Overtime',
+    'Floating Holiday': 'Floating_Holiday',
+}
+cat = cat.rename(columns={k:v for k,v in rename_map.items() if k in cat.columns})
+
+# --- 3) Helper that always returns a Series (avoids .fillna on int error) ---
+def num(col, frame=None):
+    frame = cat if frame is None else frame
+    if col in frame.columns:
+        return pd.to_numeric(frame[col], errors='coerce').fillna(0)
+    return pd.Series(0, index=frame.index, dtype='float64')
+
+# --- 4) Build standard fields ---
+cat['dt'] = pd.to_datetime(cat['dt'], errors='coerce')
+
+cat['Vacation_Earned']    = num('Vacation_Earned')
+cat['Vacation_Purchase']  = num('Vacation_Purchase')
+cat['Vacation_Total']     = cat['Vacation_Earned'] + cat['Vacation_Purchase']
+
+cat['Sick']               = num('Sick')
+cat['Personal']           = num('Personal')
+cat['SickPersonal']       = cat['Sick'] + cat['Personal']
+
+cat['PaidLeave']          = num('Leave_Paid')                # Paid Leave bucket
+cat['Holiday']            = num('Holiday')
+
+# Sum all unpaid variants you have
+unpaid_parts = ['Unpaid_IML','Unpaid_Emergency','Unpaid_Leave','Unpaid_NonPlan']
+cat['Unpaid_Total']       = sum([num(c) for c in unpaid_parts])
+
+cat['Overtime']           = num('Overtime')
+
+# Paid hours = 8 per paid day + OT – Unpaid
+HOURS_PER_DAY = 8
+primary = ['Vacation_Total','SickPersonal','PaidLeave','Holiday']
+cat['_any_flag']  = (cat[primary].sum(axis=1) > 0).astype(int)
+cat['Paid_Hours'] = HOURS_PER_DAY * cat['_any_flag'] + cat['Overtime'] - cat['Unpaid_Total']
+
+# Month & business group
+cat['Month'] = cat['dt'].dt.to_period('M').dt.to_timestamp('M')
+
+SMALL_BUSINESS = {'CCA','CSA','AO'}
+TRX_MONITORING = {'FRAUD ANALYST I','FRAUD ANALYST II','FRAUD ANALYST III'}
+def biz(x):
+    x = str(x).strip()
+    if x in SMALL_BUSINESS: return 'Small Business'
+    if x in TRX_MONITORING: return 'Transaction Risk Monitoring'
+    return 'Other'
+cat['Business_Group'] = cat['FUNCTION_CODE'].map(biz) if 'FUNCTION_CODE' in cat.columns else 'Unknown'
+
+
