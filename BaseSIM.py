@@ -888,3 +888,242 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+# NUMBER 1 
+
+import pandas as pd
+import numpy as np
+
+# --- 0) Column mapping from YOUR sheet ---
+DATE_COL       = 'dt'
+ANALYST_COL    = 'Analyst Name'
+FUNC_COL       = 'FUNCTION CODE'
+HOLIDAY_COL    = 'Holiday'                 # optional; not counted as "vacation"
+LEAVE_PAID_COL = 'Leave Paid'              # "Paid Leave" bucket
+SICK_COL       = 'Sick'
+PERSONAL_COL   = 'OI-Personal Day'
+VAC_EARN_COL   = 'Vacation Earned'
+VAC_PURCH_COL  = 'Vacation Purchase'       # may not exist; handled safely
+OVERTIME_COL   = 'Overtime'
+UNPAID_COL     = 'IML-Unpaid'              # or 'Unpaid' if that's your header
+REGION_COL     = 'Region'                  # only if you have it
+
+# Policy assumptions
+HOURS_PER_DAY        = 8
+VAC_DAYS_PER_YEAR    = 20                  # Q2
+SICKPERS_DAYS_YEAR   = 10                  # Q4
+
+# Business grouping (adjust to your codes)
+SMALL_BUSINESS = {'CCA','CSA','AO'}
+TRX_MONITORING = {'FRAUD ANALYST I','FRAUD ANALYST II','FRAUD ANALYST III'}
+
+# --- 1) Prep ---
+df = cat.copy()
+df[DATE_COL] = pd.to_datetime(df[DATE_COL], errors='coerce')
+
+def num(col):
+    return pd.to_numeric(df.get(col, 0), errors='coerce').fillna(0)
+
+# Buckets
+df['Vacation_Earned']  = num(VAC_EARN_COL)
+df['Vacation_Purchase']= num(VAC_PURCH_COL) if VAC_PURCH_COL in df.columns else 0
+df['Vacation_Total']   = df['Vacation_Earned'] + df['Vacation_Purchase']  # Q1
+
+df['Sick']             = num(SICK_COL)
+df['Personal']         = num(PERSONAL_COL)
+df['SickPersonal']     = df['Sick'] + df['Personal']                      # Q3
+
+df['PaidLeave']        = num(LEAVE_PAID_COL)                               # Q5
+df['Holiday']          = num(HOLIDAY_COL)
+
+df['Overtime']         = num(OVERTIME_COL)
+df['Unpaid']           = num(UNPAID_COL)
+
+# Paid hours definition (8 per paid day + OT - Unpaid).
+# Infer "paid day" when any time is recorded in a primary bucket.
+primary = ['Vacation_Total','SickPersonal','PaidLeave','Holiday']
+df['_any_flag'] = (df[primary].sum(axis=1) > 0).astype(int)
+df['Paid_Hours'] = HOURS_PER_DAY * df['_any_flag'] + df['Overtime'] - df['Unpaid']
+
+# Month key
+df['Month'] = df[DATE_COL].dt.to_period('M').dt.to_timestamp('M')
+
+# Business group
+def biz(b):
+    if pd.isna(b): return 'Other'
+    b = str(b).strip()
+    if b in SMALL_BUSINESS: return 'Small Business'
+    if b in TRX_MONITORING: return 'Transaction Risk Monitoring'
+    return 'Other'
+df['Business_Group'] = df[FUNC_COL].map(biz) if FUNC_COL in df.columns else 'Unknown'
+
+# --- 2) Q1/Q3/Q5 & % of Paid Hours (monthly totals) ---
+monthly = (df.groupby('Month', as_index=False)
+             .agg(Vacation_Earned=('Vacation_Earned','sum'),
+                  Vacation_Purchase=('Vacation_Purchase','sum'),
+                  Vacation_Total=('Vacation_Total','sum'),
+                  SickPersonal=('SickPersonal','sum'),
+                  PaidLeave=('PaidLeave','sum'),
+                  Paid_Hours=('Paid_Hours','sum'),
+                  Distinct_Associates=(ANALYST_COL,'nunique')))
+
+for col in ['Vacation_Total','SickPersonal','PaidLeave']:
+    monthly[f'{col}_PctPaid'] = np.where(monthly['Paid_Hours']>0,
+                                         (monthly[col]/monthly['Paid_Hours'])*100, 0.0)
+
+# --- 3) Q2: Do associates use all scheduled vacation time? (20 days/yr) ---
+# Yearly entitlement (simple version assumes full-year employment)
+vac_entitlement_hours = VAC_DAYS_PER_YEAR * HOURS_PER_DAY
+sp_entitlement_hours  = SICKPERS_DAYS_YEAR * HOURS_PER_DAY
+
+ytd_person = (df.groupby([df[DATE_COL].dt.year, ANALYST_COL], as_index=False)
+                .agg(Vacation_Used=('Vacation_Total','sum'),
+                     SickPersonal_Used=('SickPersonal','sum')))
+
+ytd_person['Vacation_vs_Entitlement_%']   = 100 * ytd_person['Vacation_Used']   / vac_entitlement_hours
+ytd_person['SickPersonal_vs_Entitlement_%']= 100 * ytd_person['SickPersonal_Used']/ sp_entitlement_hours
+
+# (Optional) If you have hire/term dates by associate, we can prorate; just tell me the column names.
+
+# --- 4) Q3/Q5 by Business Group (Small Business vs TRM) ---
+by_business = (df.groupby(['Month','Business_Group'], as_index=False)
+                 .agg(Vacation_Total=('Vacation_Total','sum'),
+                      SickPersonal=('SickPersonal','sum'),
+                      PaidLeave=('PaidLeave','sum'),
+                      Paid_Hours=('Paid_Hours','sum'),
+                      Associates=(ANALYST_COL,'nunique')))
+for col in ['Vacation_Total','SickPersonal','PaidLeave']:
+    by_business[f'{col}_PctPaid'] = np.where(by_business['Paid_Hours']>0,
+                                             (by_business[col]/by_business['Paid_Hours'])*100, 0.0)
+
+# --- 5) Same views by Region (only if you have Region) ---
+by_region = None
+if REGION_COL in df.columns:
+    by_region = (df.groupby(['Month',REGION_COL], as_index=False)
+                   .agg(Vacation_Total=('Vacation_Total','sum'),
+                        SickPersonal=('SickPersonal','sum'),
+                        PaidLeave=('PaidLeave','sum'),
+                        Paid_Hours=('Paid_Hours','sum'),
+                        Associates=(ANALYST_COL,'nunique')))
+    for col in ['Vacation_Total','SickPersonal','PaidLeave']:
+        by_region[f'{col}_PctPaid'] = np.where(by_region['Paid_Hours']>0,
+                                               (by_region[col]/by_region['Paid_Hours'])*100, 0.0)
+
+# --- 6) Quick peeks ---
+print('MONTHLY SUMMARY (totals + % of paid):')
+print(monthly.head(12))
+
+print('\nBUSINESS SPLIT (latest month):')
+print(by_business[by_business['Month']==by_business['Month'].max()])
+
+print('\nYTD ENTITLEMENT CHECK (sample):')
+print(ytd_person.head())
+
+# Optionally write to Excel
+with pd.ExcelWriter('capacity_answers.xlsx', engine='xlsxwriter') as xw:
+    monthly.to_excel(xw, 'Monthly', index=False)
+    by_business.to_excel(xw, 'By Business', index=False)
+    if by_region is not None: by_region.to_excel(xw, 'By Region', index=False)
+    ytd_person.to_excel(xw, 'Entitlement Check', index=False)
+
+print('Wrote capacity_answers.xlsx')
+
+
+
+
+# NUMBER 2 
+import matplotlib.pyplot as plt
+from pathlib import Path
+import numpy as np
+
+# Where to save charts
+save_dir = Path('capacity_charts'); save_dir.mkdir(exist_ok=True)
+
+# -----------------------------
+# Chart 1 — % of Paid Hours by category (Vacation, Sick+Personal, Paid Leave)
+# -----------------------------
+plt.figure()
+for col, label in [
+    ('Vacation_Total_PctPaid', 'Vacation % of Paid'),
+    ('SickPersonal_PctPaid',   'Sick+Personal % of Paid'),
+    ('PaidLeave_PctPaid',      'Paid Leave % of Paid')
+]:
+    if col in monthly.columns:
+        plt.plot(monthly['Month'], monthly[col], marker='o', label=label)
+plt.title('% of Paid Hours by Category (Monthly)')
+plt.xlabel('Month'); plt.ylabel('% of Paid Hours'); plt.legend()
+plt.tight_layout(); plt.savefig(save_dir / 'pct_paid_by_category.png'); plt.show()
+
+# -----------------------------
+# Chart 2 — Vacation Earned vs Purchased (Monthly)
+# -----------------------------
+plt.figure()
+x = np.arange(len(monthly))
+plt.bar(x, monthly['Vacation_Earned'])
+plt.bar(x, monthly['Vacation_Purchase'], bottom=monthly['Vacation_Earned'])
+plt.xticks(x, monthly['Month'].dt.strftime('%b'), rotation=0)
+plt.title('Vacation Earned vs Purchased (Monthly)')
+plt.xlabel('Month'); plt.ylabel('Hours')
+plt.tight_layout(); plt.savefig(save_dir / 'vacation_earned_vs_purchased.png'); plt.show()
+
+# -----------------------------
+# Chart 3 — Total Paid Hours (Monthly)
+# -----------------------------
+plt.figure()
+plt.plot(monthly['Month'], monthly['Paid_Hours'], marker='o')
+plt.title('Total Paid Hours (Monthly)')
+plt.xlabel('Month'); plt.ylabel('Hours')
+plt.tight_layout(); plt.savefig(save_dir / 'paid_hours_total.png'); plt.show()
+
+# -----------------------------
+# Chart 4 — Latest Month Breakdown by Business Group
+# -----------------------------
+latest = by_business['Month'].max()
+bm = by_business[by_business['Month'] == latest].copy()
+if not bm.empty:
+    plt.figure()
+    x = np.arange(len(bm))
+    plt.bar(x, bm['Vacation_Total'])
+    plt.bar(x, bm['SickPersonal'], bottom=bm['Vacation_Total'])
+    plt.bar(x, bm['PaidLeave'], bottom=bm['Vacation_Total'] + bm['SickPersonal'])
+    plt.xticks(x, bm['Business_Group'], rotation=15)
+    plt.title(f'Latest Month Breakdown by Business Group – {latest.date()}')
+    plt.xlabel('Business Group'); plt.ylabel('Hours')
+    plt.tight_layout(); plt.savefig(save_dir / 'latest_month_business_breakdown.png'); plt.show()
+
+# -----------------------------
+# Chart 5 — Regional % of Paid Hours (Latest Month)
+# -----------------------------
+if 'by_region' in globals() and by_region is not None:
+    rr = by_region[by_region['Month'] == by_region['Month'].max()].copy()
+    if not rr.empty:
+        rr['PctPaid_Vac'] = np.where(rr['Paid_Hours']>0, rr['Vacation_Total']/rr['Paid_Hours']*100, 0.0)
+        rr['PctPaid_SP']  = np.where(rr['Paid_Hours']>0, rr['SickPersonal']/rr['Paid_Hours']*100, 0.0)
+        rr['PctPaid_PL']  = np.where(rr['Paid_Hours']>0, rr['PaidLeave']/rr['Paid_Hours']*100, 0.0)
+
+        plt.figure()
+        x = np.arange(len(rr))
+        plt.bar(x, rr['PctPaid_Vac'])
+        plt.bar(x, rr['PctPaid_SP'], bottom=rr['PctPaid_Vac'])
+        plt.bar(x, rr['PctPaid_PL'], bottom=rr['PctPaid_Vac'] + rr['PctPaid_SP'])
+        plt.xticks(x, rr.get('Region', rr.index.astype(str)), rotation=15)
+        plt.title('Regional % of Paid Hours (Latest Month)')
+        plt.xlabel('Region'); plt.ylabel('% of Paid Hours')
+        plt.tight_layout(); plt.savefig(save_dir / 'regional_pct_paid_latest.png'); plt.show()
+
+# -----------------------------
+# Chart 6 — Entitlement Utilization Distribution (YTD by associate)
+# -----------------------------
+plt.figure()
+plt.hist(ytd_person['Vacation_vs_Entitlement_%'].clip(upper=200), bins=20)
+plt.title('Vacation Utilization vs Entitlement (YTD, %)')
+plt.xlabel('% of Annual Entitlement'); plt.ylabel('Associates')
+plt.tight_layout(); plt.savefig(save_dir / 'vacation_utilization_hist.png'); plt.show()
+
+plt.figure()
+plt.hist(ytd_person['SickPersonal_vs_Entitlement_%'].clip(upper=200), bins=20)
+plt.title('Sick+Personal Utilization vs Entitlement (YTD, %)')
+plt.xlabel('% of Annual Entitlement'); plt.ylabel('Associates')
+plt.tight_layout(); plt.savefig(save_dir / 'sickpersonal_utilization_hist.png'); plt.show()
+
+print(f'Charts saved to: {save_dir.resolve()}')
+
