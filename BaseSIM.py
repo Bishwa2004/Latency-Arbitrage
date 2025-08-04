@@ -1204,4 +1204,139 @@ def biz(x):
     return 'Other'
 cat['Business_Group'] = cat['FUNCTION_CODE'].map(biz) if 'FUNCTION_CODE' in cat.columns else 'Unknown'
 
+#NEW
+import pandas as pd
+import numpy as np
 
+# MONTHLY totals + % of Paid Hours
+monthly = (cat.groupby('Month', as_index=False)
+             .agg(Vacation_Earned   = ('Vacation_Earned','sum'),
+                  Vacation_Purchase = ('Vacation_Purchase','sum'),
+                  Vacation_Total    = ('Vacation_Total','sum'),
+                  SickPersonal      = ('SickPersonal','sum'),
+                  PaidLeave         = ('PaidLeave','sum'),
+                  Paid_Hours        = ('Paid_Hours','sum'),
+                  Distinct_Associates=('Analyst_Name','nunique')))
+
+for col in ['Vacation_Total','SickPersonal','PaidLeave']:
+    monthly[f'{col}_PctPaid'] = np.where(monthly['Paid_Hours']>0,
+                                         monthly[col]/monthly['Paid_Hours']*100, 0.0)
+
+# BUSINESS split (Small Business vs TRM)
+by_business = (cat.groupby(['Month','Business_Group'], as_index=False)
+                 .agg(Vacation_Total=('Vacation_Total','sum'),
+                      SickPersonal=('SickPersonal','sum'),
+                      PaidLeave=('PaidLeave','sum'),
+                      Paid_Hours=('Paid_Hours','sum'),
+                      Associates=('Analyst_Name','nunique')))
+for col in ['Vacation_Total','SickPersonal','PaidLeave']:
+    by_business[f'{col}_PctPaid'] = np.where(by_business['Paid_Hours']>0,
+                                             by_business[col]/by_business['Paid_Hours']*100, 0.0)
+
+# (Optional) REGION split – only if you have a Region column
+by_region = None
+if 'Region' in cat.columns:
+    by_region = (cat.groupby(['Month','Region'], as_index=False)
+                   .agg(Vacation_Total=('Vacation_Total','sum'),
+                        SickPersonal=('SickPersonal','sum'),
+                        PaidLeave=('PaidLeave','sum'),
+                        Paid_Hours=('Paid_Hours','sum'),
+                        Associates=('Analyst_Name','nunique')))
+    for col in ['Vacation_Total','SickPersonal','PaidLeave']:
+        by_region[f'{col}_PctPaid'] = np.where(by_region['Paid_Hours']>0,
+                                               by_region[col]/by_region['Paid_Hours']*100, 0.0)
+
+# Simple entitlement check (no proration)
+HOURS_PER_DAY = 8
+VAC_DAYS_PER_YEAR = 20
+SP_DAYS_PER_YEAR  = 10
+vac_entitlement = VAC_DAYS_PER_YEAR * HOURS_PER_DAY
+sp_entitlement  = SP_DAYS_PER_YEAR * HOURS_PER_DAY
+
+ytd_person = (cat.groupby([cat['dt'].dt.year, 'Analyst_Name'], as_index=False)
+                .agg(Vacation_Used=('Vacation_Total','sum'),
+                     SickPersonal_Used=('SickPersonal','sum')))
+ytd_person.rename(columns={'dt':'Year'}, inplace=True)
+ytd_person['Vacation_vs_Entitlement_%']    = 100*ytd_person['Vacation_Used']/vac_entitlement
+ytd_person['SickPersonal_vs_Entitlement_%'] = 100*ytd_person['SickPersonal_Used']/sp_entitlement
+
+# Quick peek
+display(monthly.head())
+display(by_business.tail())
+if by_region is not None: display(by_region.tail())
+
+# Save the tables
+with pd.ExcelWriter('capacity_answers.xlsx', engine='xlsxwriter') as xw:
+    monthly.to_excel(xw, 'Monthly', index=False)
+    by_business.to_excel(xw, 'By Business', index=False)
+    if by_region is not None:
+        by_region.to_excel(xw, 'By Region', index=False)
+    ytd_person.to_excel(xw, 'Entitlement Check', index=False)
+print('Wrote capacity_answers.xlsx')
+#new 2 
+import matplotlib.pyplot as plt
+from pathlib import Path
+import numpy as np
+
+save_dir = Path('capacity_charts'); save_dir.mkdir(exist_ok=True)
+
+# % of Paid Hours by category
+plt.figure()
+for col, label in [('Vacation_Total_PctPaid','Vacation'),
+                   ('SickPersonal_PctPaid','Sick+Personal'),
+                   ('PaidLeave_PctPaid','Paid Leave')]:
+    if col in monthly.columns:
+        plt.plot(monthly['Month'], monthly[col], marker='o', label=label)
+plt.title('% of Paid Hours by Category (Monthly)')
+plt.xlabel('Month'); plt.ylabel('% of Paid Hours'); plt.legend()
+plt.tight_layout(); plt.savefig(save_dir/'pct_paid_by_category.png'); plt.show()
+
+# Vacation Earned vs Purchased
+plt.figure()
+x = np.arange(len(monthly))
+plt.bar(x, monthly['Vacation_Earned'])
+plt.bar(x, monthly['Vacation_Purchase'], bottom=monthly['Vacation_Earned'])
+plt.xticks(x, monthly['Month'].dt.strftime('%b'))
+plt.title('Vacation Earned vs Purchased (Monthly)')
+plt.xlabel('Month'); plt.ylabel('Hours')
+plt.tight_layout(); plt.savefig(save_dir/'vacation_earned_vs_purchased.png'); plt.show()
+
+# Total Paid Hours
+plt.figure()
+plt.plot(monthly['Month'], monthly['Paid_Hours'], marker='o')
+plt.title('Total Paid Hours (Monthly)')
+plt.xlabel('Month'); plt.ylabel('Hours')
+plt.tight_layout(); plt.savefig(save_dir/'paid_hours_total.png'); plt.show()
+
+# Latest month – Business Group breakdown
+latest = by_business['Month'].max()
+bm = by_business[by_business['Month']==latest]
+if not bm.empty:
+    plt.figure()
+    x = np.arange(len(bm))
+    plt.bar(x, bm['Vacation_Total'])
+    plt.bar(x, bm['SickPersonal'], bottom=bm['Vacation_Total'])
+    plt.bar(x, bm['PaidLeave'], bottom=bm['Vacation_Total']+bm['SickPersonal'])
+    plt.xticks(x, bm['Business_Group'], rotation=15)
+    plt.title(f'Latest Month Breakdown by Business Group – {latest.date()}')
+    plt.xlabel('Business Group'); plt.ylabel('Hours')
+    plt.tight_layout(); plt.savefig(save_dir/'latest_month_business_breakdown.png'); plt.show()
+
+# Regional % of Paid (latest month) — only if Region data exists
+if 'by_region' in globals() and by_region is not None:
+    rr = by_region[by_region['Month']==by_region['Month'].max()].copy()
+    if not rr.empty:
+        rr['PctPaid_Vac'] = np.where(rr['Paid_Hours']>0, rr['Vacation_Total']/rr['Paid_Hours']*100, 0)
+        rr['PctPaid_SP']  = np.where(rr['Paid_Hours']>0, rr['SickPersonal']/rr['Paid_Hours']*100, 0)
+        rr['PctPaid_PL']  = np.where(rr['Paid_Hours']>0, rr['PaidLeave']/rr['Paid_Hours']*100, 0)
+        plt.figure()
+        x = np.arange(len(rr))
+        plt.bar(x, rr['PctPaid_Vac'])
+        plt.bar(x, rr['PctPaid_SP'], bottom=rr['PctPaid_Vac'])
+        plt.bar(x, rr['PctPaid_PL'], bottom=rr['PctPaid_Vac']+rr['PctPaid_SP'])
+        plt.xticks(x, rr.get('Region', rr.index.astype(str)), rotation=15)
+        plt.title('Regional % of Paid Hours (Latest Month)')
+        plt.xlabel('Region'); plt.ylabel('% of Paid Hours')
+        plt.tight_layout(); plt.savefig(save_dir/'regional_pct_paid_latest.png'); plt.show()
+
+print(f'Charts saved to: {save_dir.resolve()}')
